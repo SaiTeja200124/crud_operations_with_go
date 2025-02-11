@@ -1,9 +1,10 @@
-package main
+package handlers
 
 import (
-	// "database/sql"
+	"connection_to_pg/db"
+	"connection_to_pg/models"
+
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -12,21 +13,8 @@ import (
 	"github.com/jinzhu/gorm"
 )
 
-type Book struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Author      string `json:"author"`
-}
-
-type CreateBookBody struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Author      string `json:"author"`
-}
-
-func create(w http.ResponseWriter, r *http.Request) {
-	var body Book
+func Create(w http.ResponseWriter, r *http.Request) {
+	var body models.Book
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		log.Printf("error decoding request body into CreateBookBody struct %v", err)
@@ -34,8 +22,8 @@ func create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Use GORM to insert a new book
-	book := Book{Name: body.Name, Description: body.Description, Author: body.Author}
-	if err := DB.Create(&book).Error; err != nil {
+	book := models.Book{Name: body.Name, Description: body.Description, Author: body.Author}
+	if err := db.DB.Create(&book).Error; err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("error inserting book into books table %v", err)
 		return
@@ -44,9 +32,9 @@ func create(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"message": "Book created successfully"}`))
 }
 
-func getAll(w http.ResponseWriter, _ *http.Request) {
-	var books []Book
-	if err := DB.Find(&books).Error; err != nil {
+func GetAll(w http.ResponseWriter, _ *http.Request) {
+	var books []models.Book
+	if err := db.DB.Find(&books).Error; err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("error querying books table %v", err)
 		return
@@ -54,7 +42,6 @@ func getAll(w http.ResponseWriter, _ *http.Request) {
 
 	// Marshalling books to JSON
 	j, err := json.Marshal(books)
-	fmt.Println(j)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("error marshalling books into json %v\n", err)
@@ -64,7 +51,7 @@ func getAll(w http.ResponseWriter, _ *http.Request) {
 	w.Write(j)
 }
 
-func get(w http.ResponseWriter, r *http.Request) {
+func Get(w http.ResponseWriter, r *http.Request) {
 	searchQuery := chi.URLParam(r, "query") // Extract search term from URL
 
 	if searchQuery == "" {
@@ -73,8 +60,8 @@ func get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var books []Book
-	if err := DB.Where("name ILIKE ? OR description ILIKE ? OR author ILIKE ?",
+	var books []models.Book
+	if err := db.DB.Where("name ILIKE ? OR description ILIKE ? OR author ILIKE ?",
 		"%"+searchQuery+"%", "%"+searchQuery+"%", "%"+searchQuery+"%").Find(&books).Error; err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("error querying books table: %v", err)
@@ -98,7 +85,7 @@ func get(w http.ResponseWriter, r *http.Request) {
 	w.Write(j)
 }
 
-func update(w http.ResponseWriter, r *http.Request) {
+func Update(w http.ResponseWriter, r *http.Request) {
 	bookID, err := strconv.Atoi(chi.URLParam(r, "bookID"))
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -106,8 +93,8 @@ func update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var book Book
-	if err := DB.First(&book, bookID).Error; err != nil {
+	var book models.Book
+	if err := db.DB.First(&book, bookID).Error; err != nil {
 		if gorm.IsRecordNotFoundError(err) {
 			w.WriteHeader(http.StatusNotFound)
 			log.Printf("book with id %d not found", bookID)
@@ -138,7 +125,7 @@ func update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save updated book
-	if err := DB.Save(&book).Error; err != nil {
+	if err := db.DB.Save(&book).Error; err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("error updating book %v", err)
 		return
@@ -148,7 +135,7 @@ func update(w http.ResponseWriter, r *http.Request) {
 	log.Printf("book with id %d updated successfully", bookID)
 }
 
-func deleteBook(w http.ResponseWriter, r *http.Request) {
+func DeleteBook(w http.ResponseWriter, r *http.Request) {
 	bookID, err := strconv.Atoi(chi.URLParam(r, "bookID")) // Convert bookID from string to int
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -158,8 +145,8 @@ func deleteBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if the book exists before attempting to delete
-	var book Book
-	if err := DB.First(&book, bookID).Error; err != nil {
+	var book models.Book
+	if err := db.DB.First(&book, bookID).Error; err != nil {
 		if gorm.IsRecordNotFoundError(err) {
 			w.WriteHeader(http.StatusNotFound)
 			log.Printf("book with ID %d not found", bookID)
@@ -172,7 +159,7 @@ func deleteBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete the book
-	if err := DB.Delete(&book).Error; err != nil {
+	if err := db.DB.Delete(&book).Error; err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("error deleting book with ID %d: %v", bookID, err)
 		return

@@ -1,37 +1,20 @@
+// main.go
 package main
 
 import (
+	"connection_to_pg/db"
+	"connection_to_pg/routes"
 	"log"
 	"net/http"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 )
 
 func main() {
-	err := OpenDatabase()
+	err := db.OpenDatabase()
 	if err != nil {
 		log.Printf("error opening database connection %v", err)
 	}
-	defer CloseDatabase()
-
-	r := chi.NewRouter()
-
-	r.Use(middleware.Logger)
-
-	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("Hello World!"))
-	})
-
-	r.Post("/books", create)
-
-	r.Get("/books", getAll)
-
-	r.Get("/books/{query}", get)
-
-	r.Put("/books/{bookID}", update)
-
-	r.Delete("/books/{bookID}", deleteBook)
+	defer db.CloseDatabase()
+	r := routes.SetupRoutes() // Load routes from separate file
 
 	http.ListenAndServe("localhost:8080", r)
 }
