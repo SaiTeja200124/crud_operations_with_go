@@ -3,6 +3,7 @@ package handlers
 import (
 	"connection_to_pg/db"
 	"connection_to_pg/models"
+	"fmt"
 
 	"encoding/json"
 	"log"
@@ -10,26 +11,42 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jinzhu/gorm"
+	// "github.com/jinzhu/gorm"
+	"gorm.io/gorm"
 )
 
-func Create(w http.ResponseWriter, r *http.Request) {
-	var body models.Book
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		log.Printf("error decoding request body into CreateBookBody struct %v", err)
+// Define an interface for database operations
+type Database interface {
+	Create(value interface{}) *gorm.DB
+}
+
+// Handler struct now depends on the interface, not on *gorm.DB directly
+type Handler struct {
+	DB Database
+}
+
+func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
+	var book models.Book
+	err := json.NewDecoder(r.Body).Decode(&book)
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// Use GORM to insert a new book
-	book := models.Book{Name: body.Name, Description: body.Description, Author: body.Author}
-	if err := db.DB.Create(&book).Error; err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Printf("error inserting book into books table %v", err)
+	// ✅ Fix: Ensure result.Error is checked properly
+	result := h.DB.Create(&book)
+	fmt.Printf("Result: %+v\n", result)            // Print the entire result for inspection
+	fmt.Printf("Result.Error: %v\n", result.Error) // Print the error specifically
+
+	if result.Error != nil {
+		fmt.Println("Error block entered") // Make sure this block is executed
+		http.Error(w, result.Error.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	fmt.Println("Success block entered")
 	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte(`{"message": "Book created successfully"}`))
+	json.NewEncoder(w).Encode(map[string]string{"message": "Book created successfully"})
 }
 
 func GetAll(w http.ResponseWriter, _ *http.Request) {
@@ -95,13 +112,13 @@ func Update(w http.ResponseWriter, r *http.Request) {
 
 	var book models.Book
 	if err := db.DB.First(&book, bookID).Error; err != nil {
-		if gorm.IsRecordNotFoundError(err) {
-			w.WriteHeader(http.StatusNotFound)
-			log.Printf("book with id %d not found", bookID)
-		} else {
-			w.WriteHeader(http.StatusInternalServerError)
-			log.Printf("error querying book from books table with id %d %v", bookID, err)
-		}
+		// if gorm.IsRecordNotFoundError(err) {
+		// 	w.WriteHeader(http.StatusNotFound)
+		// 	log.Printf("book with id %d not found", bookID)
+		// } else {
+		// 	w.WriteHeader(http.StatusInternalServerError)
+		// 	log.Printf("error querying book from books table with id %d %v", bookID, err)
+		// }
 		return
 	}
 
@@ -147,14 +164,14 @@ func DeleteBook(w http.ResponseWriter, r *http.Request) {
 	// Check if the book exists before attempting to delete
 	var book models.Book
 	if err := db.DB.First(&book, bookID).Error; err != nil {
-		if gorm.IsRecordNotFoundError(err) {
-			w.WriteHeader(http.StatusNotFound)
-			log.Printf("book with ID %d not found", bookID)
-			w.Write([]byte(`{"error": "Book not found"}`))
-		} else {
-			w.WriteHeader(http.StatusInternalServerError)
-			log.Printf("error querying book from database: %v", err)
-		}
+		// if gorm.IsRecordNotFoundError(err) {
+		// 	w.WriteHeader(http.StatusNotFound)
+		// 	log.Printf("book with ID %d not found", bookID)
+		// 	w.Write([]byte(`{"error": "Book not found"}`))
+		// } else {
+		// 	w.WriteHeader(http.StatusInternalServerError)
+		// 	log.Printf("error querying book from database: %v", err)
+		// }
 		return
 	}
 
