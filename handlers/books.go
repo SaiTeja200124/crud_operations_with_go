@@ -1,23 +1,30 @@
 package handlers
 
 import (
-	"connection_to_pg/db"
+	// "connection_to_pg/db"
 	"connection_to_pg/models"
+	"errors"
 	"fmt"
+	"strconv"
 
 	"encoding/json"
 	"log"
 	"net/http"
-	"strconv"
+
+	// "strconv"
 
 	"github.com/go-chi/chi/v5"
-	// "github.com/jinzhu/gorm"
 	"gorm.io/gorm"
 )
 
 // Define an interface for database operations
 type Database interface {
 	Create(value interface{}) *gorm.DB
+	Find(dest interface{}, conds ...interface{}) *gorm.DB
+	Where(query interface{}, args ...interface{}) *gorm.DB
+	First(dest interface{}, conds ...interface{}) *gorm.DB
+	Save(value interface{}) *gorm.DB
+	Delete(value interface{}) *gorm.DB
 }
 
 // Handler struct now depends on the interface, not on *gorm.DB directly
@@ -49,52 +56,54 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Book created successfully"})
 }
 
-func GetAll(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) GetAll(w http.ResponseWriter, _ *http.Request) {
 	var books []models.Book
-	if err := db.DB.Find(&books).Error; err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Printf("error querying books table %v", err)
-		return
-	}
 
-	// Marshalling books to JSON
-	j, err := json.Marshal(books)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Printf("error marshalling books into json %v\n", err)
-		return
-	}
-
-	w.Write(j)
-}
-
-func Get(w http.ResponseWriter, r *http.Request) {
-	searchQuery := chi.URLParam(r, "query") // Extract search term from URL
-
-	if searchQuery == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`{"error": "Missing search query"}`))
-		return
-	}
-
-	var books []models.Book
-	if err := db.DB.Where("name ILIKE ? OR description ILIKE ? OR author ILIKE ?",
-		"%"+searchQuery+"%", "%"+searchQuery+"%", "%"+searchQuery+"%").Find(&books).Error; err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+	// Query the database
+	if err := h.DB.Find(&books).Error; err != nil {
+		http.Error(w, `{"error": "Failed to retrieve books"}`, http.StatusInternalServerError)
 		log.Printf("error querying books table: %v", err)
 		return
 	}
 
-	if len(books) == 0 {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"message": "No books found"}`))
+	// Marshal books to JSON
+	j, err := json.Marshal(books)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to marshal books"}`, http.StatusInternalServerError)
+		log.Printf("error marshalling books into json: %v", err)
 		return
 	}
 
-	j, err := json.Marshal(books)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(j)
+}
+
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "query")
+	fmt.Println("Received ID:", idStr)
+
+	id, err := strconv.Atoi(idStr) // Convert searchQuery to an integer
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Printf("error marshalling books into json: %v", err)
+		http.Error(w, `{"error": "Invalid ID format"}`, http.StatusBadRequest)
+		return
+	}
+
+	if h.DB == nil {
+		panic("h.DB is nil - database connection not initialized")
+	}
+	fmt.Println("Database connection initialized")
+
+	var book models.Book
+	if err := h.DB.First(&book, id).Error; err != nil {
+		http.Error(w, `{"message": "Book not found"}`, http.StatusNotFound)
+		return
+	}
+	fmt.Println("Book found:", book)
+
+	j, err := json.Marshal(book)
+	if err != nil {
+		http.Error(w, "Failed to marshal book", http.StatusInternalServerError)
 		return
 	}
 
@@ -102,86 +111,80 @@ func Get(w http.ResponseWriter, r *http.Request) {
 	w.Write(j)
 }
 
-func Update(w http.ResponseWriter, r *http.Request) {
-	bookID, err := strconv.Atoi(chi.URLParam(r, "bookID"))
+func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
+	// Extract and validate book ID from URL
+	bookIDParam := chi.URLParam(r, "id") // Ensure this matches the test case
+	bookID, err := strconv.Atoi(bookIDParam)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		log.Printf("error parsing %d from string into integer %v", bookID, err)
+		http.Error(w, "Invalid book ID", http.StatusBadRequest)
 		return
 	}
 
+	// Find the book in the database
 	var book models.Book
-	if err := db.DB.First(&book, bookID).Error; err != nil {
-		// if gorm.IsRecordNotFoundError(err) {
-		// 	w.WriteHeader(http.StatusNotFound)
-		// 	log.Printf("book with id %d not found", bookID)
-		// } else {
-		// 	w.WriteHeader(http.StatusInternalServerError)
-		// 	log.Printf("error querying book from books table with id %d %v", bookID, err)
-		// }
+	if err := h.DB.First(&book, bookID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, `{"error": "Book not found"}`, http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
-	// Decode request body into a map (to check for missing fields)
-	var body map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		log.Printf("error decoding request body %v", err)
+	// Decode request body
+	var updateData models.Book
+	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
+		http.Error(w, `{"error": "Invalid request payload"}`, http.StatusBadRequest)
 		return
 	}
 
-	// Conditionally update fields
-	if name, exists := body["name"].(string); exists {
-		book.Name = name
-	}
-	if desc, exists := body["description"].(string); exists {
-		book.Description = desc
-	}
-	if author, exists := body["author"].(string); exists {
-		book.Author = author
-	}
+	// Update book fields
+	book.Name = updateData.Name
+	book.Description = updateData.Description
+	book.Author = updateData.Author
 
 	// Save updated book
-	if err := db.DB.Save(&book).Error; err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Printf("error updating book %v", err)
+	if err := h.DB.Save(&book).Error; err != nil {
+		http.Error(w, "Failed to update book", http.StatusInternalServerError)
 		return
 	}
 
+	// Success response
 	w.WriteHeader(http.StatusOK)
-	log.Printf("book with id %d updated successfully", bookID)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Book updated successfully"})
 }
 
-func DeleteBook(w http.ResponseWriter, r *http.Request) {
-	bookID, err := strconv.Atoi(chi.URLParam(r, "bookID")) // Convert bookID from string to int
+func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	// Extract and validate book ID from URL
+	bookIDParam := chi.URLParam(r, "id") // Ensure this matches the URL parameter
+	bookID, err := strconv.Atoi(bookIDParam)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
+		http.Error(w, `{"error": "Invalid book ID"}`, http.StatusBadRequest)
 		log.Printf("error parsing book ID from string to integer: %v", err)
-		w.Write([]byte(`{"error": "Invalid book ID"}`))
 		return
 	}
 
 	// Check if the book exists before attempting to delete
 	var book models.Book
-	if err := db.DB.First(&book, bookID).Error; err != nil {
-		// if gorm.IsRecordNotFoundError(err) {
-		// 	w.WriteHeader(http.StatusNotFound)
-		// 	log.Printf("book with ID %d not found", bookID)
-		// 	w.Write([]byte(`{"error": "Book not found"}`))
-		// } else {
-		// 	w.WriteHeader(http.StatusInternalServerError)
-		// 	log.Printf("error querying book from database: %v", err)
-		// }
+	if err := h.DB.First(&book, bookID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, `{"error": "Book not found"}`, http.StatusNotFound)
+			log.Printf("book with ID %d not found", bookID)
+			return
+		}
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		log.Printf("error querying book from database: %v", err)
 		return
 	}
 
 	// Delete the book
-	if err := db.DB.Delete(&book).Error; err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+	if err := h.DB.Delete(&book).Error; err != nil {
+		http.Error(w, "Failed to delete book", http.StatusInternalServerError)
 		log.Printf("error deleting book with ID %d: %v", bookID, err)
 		return
 	}
 
+	// Success response
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"message": "Book deleted successfully"}`))
+	json.NewEncoder(w).Encode(map[string]string{"message": "Book deleted successfully"})
 }

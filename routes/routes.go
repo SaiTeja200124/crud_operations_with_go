@@ -14,10 +14,10 @@ func SetupRoutes(handler *handlers.Handler) *chi.Mux {
 
 	r.Use(middleware.Logger)
 	r.Post("/books", handler.Create)
-	r.Get("/books", handlers.GetAll)
-	r.Get("/books/{query}", handlers.Get)
-	r.Put("/books/{bookID}", handlers.Update)
-	r.Delete("/books/{bookID}", handlers.DeleteBook)
+	r.Get("/books", handler.GetAll)
+	r.Get("/books/{query}", handler.Get)
+	r.Put("/books/{bookID}", handler.Update)
+	r.Delete("/books/{bookID}", handler.Delete)
 
 	return r
 }
