@@ -67,17 +67,14 @@ func (h *Handler) GetAll(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	// Marshal books to JSON
-	j, err := json.Marshal(books)
-	if err != nil {
-		http.Error(w, `{"error": "Failed to marshal books"}`, http.StatusInternalServerError)
-		log.Printf("error marshalling books into json: %v", err)
-		return
-	}
+	j, _ := json.Marshal(books)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(j)
 }
+
+var jsonMarshal = json.Marshal
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "query")
@@ -101,7 +98,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Println("Book found:", book)
 
-	j, err := json.Marshal(book)
+	j, err := jsonMarshal(book)
 	if err != nil {
 		http.Error(w, "Failed to marshal book", http.StatusInternalServerError)
 		return

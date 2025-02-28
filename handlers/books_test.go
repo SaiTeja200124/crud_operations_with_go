@@ -176,6 +176,79 @@ func TestGet_Success(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestGet_BookNotFound(t *testing.T) {
+	mockDB := new(mocks.MockDB)
+	handler := Handler{DB: mockDB}
+
+	bookID := 99
+
+	mockDB.On("First", mock.AnythingOfType("*models.Book"), bookID).
+		Return(&gorm.DB{Error: gorm.ErrRecordNotFound})
+
+	req, err := http.NewRequest("GET", "/books/"+strconv.Itoa(bookID), nil)
+	assert.NoError(t, err)
+
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("query", strconv.Itoa(bookID))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.Get(rr, req)
+
+	assert.Equal(t, http.StatusNotFound, rr.Code)
+	assert.JSONEq(t, `{"message": "Book not found"}`, rr.Body.String())
+
+	mockDB.AssertExpectations(t)
+}
+
+type ErrorMarshaler struct{}
+
+func (e ErrorMarshaler) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("JSON marshalling error")
+}
+
+func TestGet_JSONMarshallingError(t *testing.T) {
+	mockDB := new(mocks.MockDB)
+	handler := Handler{DB: mockDB}
+
+	bookID := 1
+	existingBook := models.Book{
+		ID:          bookID,
+		Name:        "Sample Book",
+		Description: "Sample Description",
+		Author:      "Sample Author",
+	}
+
+	mockDB.On("First", mock.AnythingOfType("*models.Book"), bookID).
+		Run(func(args mock.Arguments) {
+			argBook := args.Get(0).(*models.Book)
+			*argBook = existingBook
+		}).Return(&gorm.DB{})
+
+	req, err := http.NewRequest("GET", "/books/"+strconv.Itoa(bookID), nil)
+	assert.NoError(t, err)
+
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("query", strconv.Itoa(bookID))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+
+	// Temporarily replace the jsonMarshal function to simulate an error
+	originalMarshal := jsonMarshal
+	jsonMarshal = func(v interface{}) ([]byte, error) {
+		return nil, errors.New("JSON marshalling error")
+	}
+	defer func() { jsonMarshal = originalMarshal }()
+
+	handler.Get(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Equal(t, "Failed to marshal book\n", rr.Body.String())
+
+	mockDB.AssertExpectations(t)
+}
+
 func TestGet_MissingQuery(t *testing.T) {
 	mockDB := new(mocks.MockDB)
 	handler := &Handler{DB: mockDB}
@@ -346,6 +419,99 @@ func TestUpdate_InvalidJSON(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestUpdate_InvalidBookID(t *testing.T) {
+	mockDB := new(mocks.MockDB)
+	handler := Handler{DB: mockDB}
+
+	invalidBookID := "abc"
+
+	req, err := http.NewRequest("PUT", "/books/"+invalidBookID, nil)
+	assert.NoError(t, err)
+
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", invalidBookID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.Update(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Equal(t, "Invalid book ID\n", rr.Body.String())
+
+	mockDB.AssertExpectations(t)
+}
+
+func TestUpdate_DatabaseError(t *testing.T) {
+	mockDB := new(mocks.MockDB)
+	handler := Handler{DB: mockDB}
+
+	bookID := 1
+
+	// Mock the `First` method to return a database error
+	mockDB.On("First", mock.AnythingOfType("*models.Book"), bookID).
+		Return(&gorm.DB{Error: errors.New("database error")})
+
+	req, err := http.NewRequest("PUT", "/books/"+strconv.Itoa(bookID), nil)
+	assert.NoError(t, err)
+
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", strconv.Itoa(bookID))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.Update(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Equal(t, "Database error\n", rr.Body.String())
+
+	mockDB.AssertExpectations(t)
+}
+
+func TestUpdate_FailedToUpdateBook(t *testing.T) {
+	mockDB := new(mocks.MockDB)
+	handler := Handler{DB: mockDB}
+
+	bookID := 1
+	existingBook := models.Book{
+		ID:          bookID,
+		Name:        "Old Name",
+		Description: "Old Desc",
+		Author:      "Old Author",
+	}
+
+	mockDB.On("First", mock.AnythingOfType("*models.Book"), bookID).
+		Run(func(args mock.Arguments) {
+			argBook := args.Get(0).(*models.Book)
+			*argBook = existingBook
+		}).Return(&gorm.DB{})
+
+	mockDB.On("Save", mock.AnythingOfType("*models.Book")).
+		Return(&gorm.DB{Error: errors.New("failed to update book")})
+
+	updateData := models.Book{
+		Name:        "New Name",
+		Description: "New Desc",
+		Author:      "New Author",
+	}
+	jsonBody, _ := json.Marshal(updateData)
+
+	req, err := http.NewRequest("PUT", "/books/"+strconv.Itoa(bookID), bytes.NewBuffer(jsonBody))
+	assert.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", strconv.Itoa(bookID))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.Update(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Equal(t, "Failed to update book\n", rr.Body.String())
+
+	mockDB.AssertExpectations(t)
+}
+
 //TEST CASES FOR DELETE OPERATION
 
 func TestDelete_Success(t *testing.T) {
@@ -427,6 +593,71 @@ func TestDelete_InvalidBookID(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 	assert.JSONEq(t, `{"error": "Invalid book ID"}`, rr.Body.String())
+
+	mockDB.AssertExpectations(t)
+}
+
+func TestDelete_DatabaseError(t *testing.T) {
+	mockDB := new(mocks.MockDB)
+	handler := Handler{DB: mockDB}
+
+	bookID := 1
+
+	// Mock the `First` method to return a database error
+	mockDB.On("First", mock.AnythingOfType("*models.Book"), bookID).
+		Return(&gorm.DB{Error: errors.New("database error")})
+
+	req, err := http.NewRequest("DELETE", "/books/"+strconv.Itoa(bookID), nil)
+	assert.NoError(t, err)
+
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", strconv.Itoa(bookID))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.Delete(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Equal(t, "Database error\n", rr.Body.String())
+
+	mockDB.AssertExpectations(t)
+}
+
+func TestDelete_FailedToDeleteBook(t *testing.T) {
+	mockDB := new(mocks.MockDB)
+	handler := Handler{DB: mockDB}
+
+	bookID := 1
+	existingBook := models.Book{
+		ID:          bookID,
+		Name:        "Sample Book",
+		Description: "Sample Description",
+		Author:      "Sample Author",
+	}
+
+	// Mock the `First` method to return a valid book
+	mockDB.On("First", mock.AnythingOfType("*models.Book"), bookID).
+		Run(func(args mock.Arguments) {
+			argBook := args.Get(0).(*models.Book)
+			*argBook = existingBook
+		}).Return(&gorm.DB{})
+
+	// Mock the `Delete` method to return an error
+	mockDB.On("Delete", mock.AnythingOfType("*models.Book")).
+		Return(&gorm.DB{Error: errors.New("failed to delete book")})
+
+	req, err := http.NewRequest("DELETE", "/books/"+strconv.Itoa(bookID), nil)
+	assert.NoError(t, err)
+
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", strconv.Itoa(bookID))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.Delete(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Equal(t, "Failed to delete book\n", rr.Body.String())
 
 	mockDB.AssertExpectations(t)
 }
